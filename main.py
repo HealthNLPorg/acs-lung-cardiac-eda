@@ -38,36 +38,34 @@ def is_before(pt_earliest: str, note_date: str) -> bool:
     return parse_and_normalize_date(pt_earliest) <= parse_and_normalize_date(note_date)
 
 
-def fn_match_and_after_earlist(
+def mrn_if_note_and_time_compatible(
     mrn_to_earliest_date: dict[int, str], note_json: dict[str, str | int]
-) -> tuple[str, bool]:
+) -> int | None:
     mrn = int(note_json["DFCI_MRN"])
     if mrn not in mrn_to_earliest_date.keys():
-        return mrn, False
+        return None
     pt_earliest = mrn_to_earliest_date.get(mrn)
     if pt_earliest is None:
         ValueError(
             f"{mrn} is not associated with a date despite nulls having been dropped earlier"
         )
-        return mrn, False
+        return None
     note_date = note_json.get("EVENT_DATE")
     if note_date is None:
         ValueError(f"{note_json} missing an event date")
-        return mrn, False
-    return mrn, is_before(pt_earliest, note_date)
+        return None
+    if is_before(pt_earliest, note_date):
+        return mrn
+    return None # for type checking
 
 
 def get_file_totals(
     mrn_to_earliest_date: dict[int, str], json_path: str
-) -> Counter[str]:
+) -> Counter[int]:
     with open(json_path) as f:
         note_json_list = json.load(f)["response"]["docs"]
-    local_relevance_check = partial(fn_match_and_after_earlist, mrn_to_earliest_date)
-    return Counter(
-        mrn
-        for mrn, is_relevant in map(local_relevance_check, note_json_list)
-        if is_relevant
-    )
+    local_mrn = partial(mrn_if_note_and_time_compatible, mrn_to_earliest_date)
+    return Counter(filter(None, map(local_mrn, note_json_list)))
 
 
 def get_dir_totals(
