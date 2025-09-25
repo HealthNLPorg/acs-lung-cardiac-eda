@@ -3,7 +3,6 @@ import os
 import json  # if proves to be too slow or memory consuming look into https://github.com/ICRAR/ijson + https://github.com/lloyd/yajl
 import argparse
 import random
-from itertools import chain, groupby
 from functools import partial, lru_cache
 from collections.abc import Iterable
 from typing import Callable, cast
@@ -234,8 +233,14 @@ def get_valid_mrn_and_date_notes_from_json(
 
 
 def get_dir_to_valid_mrn_and_date_notes(
-    mrn_to_earliest_date: dict[int, str], notes_dir: str
+    mrn_to_earliest_date: dict[int, str], notes_dir: str, relevant_dirs: set[str]
 ) -> dict[str, list[dict[str, str | int]]]:
+    def is_relevant(dirname) -> bool:
+        for relevant_dir in relevant_dirs:
+            if dirname.lower().startswith(relevant_dir):
+                return True
+        return False
+
     def get_valid_mrn_and_date_notes(
         root: str, files: list[str]
     ) -> Iterable[dict[str, str | int]]:
@@ -254,6 +259,7 @@ def get_dir_to_valid_mrn_and_date_notes(
     return {
         os.path.basename(root): list(get_valid_mrn_and_date_notes(root, files))
         for root, dirs, files in os.walk(notes_dir)
+        if is_relevant(os.path.basename(root))
     }
 
 
@@ -263,31 +269,15 @@ def merge_by_named_predicates(
     dir_to_valid_mrn_and_date_notes: dict[str, list[dict[str, str | int]]],
     name_to_predicate: dict[str, Callable[[str], bool]],
 ) -> dict[str, list[dict[str, str | int]]]:
-    def grouped_by_predicate(
-        predicate: Callable[[str], bool],
-    ) -> Iterable[tuple[str, list[dict[str, str | int]]]]:
-        def key_fn(dir_and_notes: tuple[str, list[dict[str, str | int]]]) -> bool:
-            dirname, _ = dir_and_notes
-            return predicate(dirname)
-
-        return cast(
-            Iterable[tuple[str, list[dict[str, str | int]]]],
-            groupby(
-                sorted(dir_to_valid_mrn_and_date_notes.items(), key=key_fn), key=key_fn
-            ),
-        )
-
     def re_grouped_notes(
         predicate: Callable[[str], bool],
-    ) -> list[dict[str, str | int]]:
-        for is_group, note_clusters in grouped_by_predicate(predicate):
-            if is_group:
-                return list(chain.from_iterable(note_clusters))
-        ValueError("Something wrong with clustering - check in more detail")
-        return []
+    ) -> Iterable[dict[str, str | int]]:
+        for dirname, notes in dir_to_valid_mrn_and_date_notes.items():
+            if predicate(dirname):
+                yield from notes
 
     return {
-        predicate_name: re_grouped_notes(predicate)
+        predicate_name: list(re_grouped_notes(predicate))
         for predicate_name, predicate in name_to_predicate.items()
     }
 
@@ -314,9 +304,6 @@ def collect_notes_and_write_metrics(
             mrn_and_date_df["mrn"], mrn_and_date_df["earliest_date"]
         )
     }
-    dir_to_valid_mrn_and_date_notes = get_dir_to_valid_mrn_and_date_notes(
-        mrn_to_earliest_date, notes_dir
-    )
 
     def is_one_of(core_names: Iterable[str]) -> Callable[[str], bool]:
         def __is_one_of(dirname: str) -> bool:
@@ -333,6 +320,9 @@ def collect_notes_and_write_metrics(
         "lmr": is_one_of(("lmr",)),
         "inpatient_and_progress": is_one_of(("inpatient", "progress")),
     }
+    dir_to_valid_mrn_and_date_notes = get_dir_to_valid_mrn_and_date_notes(
+        mrn_to_earliest_date, notes_dir, {"lmr", "inpatient", "progress"}
+    )
 
     name_to_initial_filter = {
         "lmr": lmr_provider_type_and_specialty_filter,
@@ -342,7 +332,10 @@ def collect_notes_and_write_metrics(
         dir_to_valid_mrn_and_date_notes, name_to_predicate
     )
     for synthetic_category, notes in synthetic_category_to_notes.items():
-        initial_filter = name_to_initial_filter.get(synthetic_category, lambda s: s)
+        initial_filter = name_to_initial_filter.get(synthetic_category)
+        if initial_filter is None:
+            logger.info(f"Skipping {synthetic_category}")
+            continue
         initial_filtered = initial_filter(notes)
         save_jsonl(
             os.path.join(output_dir, "before_word_count_filter"),
