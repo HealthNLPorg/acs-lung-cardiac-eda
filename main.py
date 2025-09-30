@@ -73,13 +73,15 @@ def mkdir(dir_name: str) -> None:
     _dir_name.mkdir(parents=True, exist_ok=True)
 
 
-def save_jsonl(
-    output_dir: str, fn: str, note_json_list: list[dict[str, int | str]]
-) -> None:
+def save_jsonl(output_dir: str, fn: str, note_json_list: list[dict]) -> None:
     mkdir(output_dir)
+
+    # Honestly can't believe Python doesn't implement this part
+    def __to_line(d: dict) -> str:
+        return f"{json.dumps(d)}\n"
+
     with open(os.path.join(output_dir, f"{fn}.jsonl"), mode="w") as f:
-        for note_json in note_json_list:
-            f.write(json.dumps(note_json))
+        f.writelines(map(__to_line, note_json_list))
 
 
 def word_count_filter(
@@ -358,6 +360,7 @@ def collect_notes_and_write_metrics(
         "lmr": "LMR",
         "inpatient_and_progress": "Inpatient+Progress",
     }
+    mkdir(output_dir)
     for synthetic_category, notes in synthetic_category_to_notes.items():
         initial_filter = name_to_initial_filter.get(synthetic_category)
         if initial_filter is None:
