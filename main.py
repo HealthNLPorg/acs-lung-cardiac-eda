@@ -254,18 +254,30 @@ def get_valid_mrn_and_date_notes_from_json(
 def identify_keys_with_unique_values(
     unique_id_debug_dict: dict[str, list[note_dict]],
 ) -> None:
+    @lru_cache
+    def __norm_key(k: str) -> str:
+        return k.strip().lower()
+
+    def __is_index_key(k: str) -> bool:
+        norm_k = __norm_key(k)
+        return "mrn" in norm_k or "id" in norm_k
+
+    def __is_report_key(k: str) -> bool:
+        norm_k = __norm_key(k)
+        return "rpt" in norm_k
+
     collected_note_dicts = [
         _note_dict for ls in unique_id_debug_dict.values() for _note_dict in ls
     ]
-    indexing_keys = {
+    all_keys = {
         k
         for k in set(
             chain.from_iterable(
                 _note_dict.keys() for _note_dict in collected_note_dicts
             )
         )
-        if "mrn" in k.lower() or "id" in k.lower()
     }
+    indexing_keys = set(filter(__is_index_key, all_keys))
     for indexing_key in indexing_keys:
 
         def __local_get(_note_dict: note_dict) -> str | None:
@@ -284,6 +296,9 @@ def identify_keys_with_unique_values(
             logger.info(
                 f"{indexing_key} values not unique, total values {len(collected_values)} unique values {len(unique_values)}"
             )
+
+    report_keys = sorted(filter(__is_report_key, all_keys))
+    logger.info(f"Report keys:\n{report_keys}")
 
 
 def get_dir_to_valid_mrn_and_date_notes(
