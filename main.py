@@ -4,6 +4,7 @@ import json  # if proves to be too slow or memory consuming look into https://gi
 import argparse
 import random
 from functools import partial, lru_cache
+from itertools import chain
 from collections.abc import Iterable
 from typing import Callable, cast
 import datetime
@@ -46,6 +47,7 @@ logging.basicConfig(
     datefmt="%m/%d/%Y %H:%M:%S",
     level=logging.INFO,
 )
+note_dict = dict[str, str | int]
 
 
 def __normalize(s: str) -> str:
@@ -186,7 +188,7 @@ def inpatient_and_progress_provider_filter(
 
 
 def has_valid_mrn_and_date(
-    mrn_to_earliest_date: dict[int, str], note_json: dict[str, str | int]
+    mrn_to_earliest_date: dict[int, str], note_json: note_dict
 ) -> bool:
     mrn = int(note_json["DFCI_MRN"])
     if mrn not in mrn_to_earliest_date:
@@ -200,7 +202,7 @@ def has_valid_mrn_and_date(
     return is_before(pt_earliest, note_date)
 
 
-def raw_csv_parse(csv_path: str) -> list[dict[str, str | int]]:
+def raw_csv_parse(csv_path: str) -> list[note_dict]:
     return pl.read_csv(csv_path).to_dicts()
 
 
@@ -208,7 +210,7 @@ def get_valid_mrn_and_date_notes_from_csv(
     mrn_to_earliest_date: dict[int, str],
     csv_path: str,
     debug_source: str | None = None,
-) -> list[dict[str, str | int]]:
+) -> list[note_dict]:
     local_valid_mrn_and_date = partial(has_valid_mrn_and_date, mrn_to_earliest_date)
     note_json_list = pl.read_csv(csv_path).to_dicts()
 
@@ -224,7 +226,7 @@ def get_valid_mrn_and_date_notes_from_csv(
     return result
 
 
-def raw_json_parse(json_path: str) -> list[dict[str, str | int]]:
+def raw_json_parse(json_path: str) -> list[note_dict]:
     with open(json_path) as f:
         return json.load(f)["response"]["docs"]
 
@@ -233,7 +235,7 @@ def get_valid_mrn_and_date_notes_from_json(
     mrn_to_earliest_date: dict[int, str],
     json_path: str,
     debug_source: str | None = None,
-) -> list[dict[str, str | int]]:
+) -> list[note_dict]:
     with open(json_path) as f:
         note_json_list = json.load(f)["response"]["docs"]
     local_valid_mrn_and_date = partial(has_valid_mrn_and_date, mrn_to_earliest_date)
@@ -249,9 +251,44 @@ def get_valid_mrn_and_date_notes_from_json(
     return result
 
 
+def identify_keys_with_unique_values(
+    unique_id_debug_dict: dict[str, list[note_dict]],
+) -> None:
+    collected_note_dicts = [
+        _note_dict for ls in unique_id_debug_dict.values() for _note_dict in ls
+    ]
+    indexing_keys = {
+        k
+        for k in set(
+            chain.from_iterable(
+                _note_dict.keys() for _note_dict in collected_note_dicts
+            )
+        )
+        if "mrn" in k.lower() or "id" in k.lower()
+    }
+    for indexing_key in indexing_keys:
+
+        def __local_get(_note_dict: note_dict) -> str | None:
+            result = _note_dict.get(indexing_key)
+            if result is not None:
+                return str(result)
+            return result
+
+        collected_values = list(filter(None, map(__local_get, collected_note_dicts)))
+        unique_values = set(collected_values)
+        if len(collected_values) == len(unique_values):
+            logger.info(
+                f"{indexing_key} has unique values, total: {len(unique_values)}"
+            )
+        else:
+            logger.info(
+                f"{indexing_key} values not unique, total values {len(collected_values)} unique values {len(unique_values)}"
+            )
+
+
 def get_dir_to_valid_mrn_and_date_notes(
     mrn_to_earliest_date: dict[int, str], notes_dir: str, relevant_dirs: set[str]
-) -> dict[str, list[dict[str, str | int]]]:
+) -> dict[str, list[note_dict]]:
     def is_relevant(dirname) -> bool:
         for relevant_dir in relevant_dirs:
             if dirname.lower().startswith(relevant_dir):
@@ -260,7 +297,7 @@ def get_dir_to_valid_mrn_and_date_notes(
 
     def get_valid_mrn_and_date_notes(
         root: str, files: list[str]
-    ) -> Iterable[dict[str, str | int]]:
+    ) -> Iterable[note_dict]:
         for fn in files:
             if fn.lower().endswith("json"):
                 yield from raw_json_parse(os.path.join(root, fn))
@@ -269,10 +306,16 @@ def get_dir_to_valid_mrn_and_date_notes(
             else:
                 ValueError(f"{os.path.join(root, fn)} has bad extension")
 
-    initial = {
+    unique_id_debug_dict = {
         os.path.basename(root): list(get_valid_mrn_and_date_notes(root, files))
         for root, dirs, files in os.walk(notes_dir)
-        if is_relevant(os.path.basename(root))
+        # if is_relevant(os.path.basename(root))
+    }
+    identify_keys_with_unique_values(unique_id_debug_dict)
+    initial = {
+        dirname: note_dicts
+        for dirname, note_dicts in unique_id_debug_dict.items()
+        if is_relevant(dirname)
     }
 
     local_valid_mrn_and_date = partial(has_valid_mrn_and_date, mrn_to_earliest_date)
@@ -291,12 +334,12 @@ def get_dir_to_valid_mrn_and_date_notes(
 # NB: depending on the predicates used, there may be notes/folders left out,
 # this is intentional for adjusting later
 def merge_by_named_predicates(
-    dir_to_valid_mrn_and_date_notes: dict[str, list[dict[str, str | int]]],
+    dir_to_valid_mrn_and_date_notes: dict[str, list[note_dict]],
     name_to_predicate: dict[str, Callable[[str], bool]],
-) -> dict[str, list[dict[str, str | int]]]:
+) -> dict[str, list[note_dict]]:
     def re_grouped_notes(
         predicate: Callable[[str], bool],
-    ) -> Iterable[dict[str, str | int]]:
+    ) -> Iterable[note_dict]:
         for dirname, notes in dir_to_valid_mrn_and_date_notes.items():
             if predicate(dirname):
                 yield from notes
