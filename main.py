@@ -319,7 +319,7 @@ def get_dir_to_valid_mrn_and_date_notes(
             elif fn.lower().endswith("csv"):
                 yield from raw_csv_parse(os.path.join(root, fn))
             else:
-                ValueError(f"{os.path.join(root, fn)} has bad extension")
+                raise ValueError(f"{os.path.join(root, fn)} has bad extension")
 
     unique_id_debug_dict = {
         os.path.basename(root): list(get_valid_mrn_and_date_notes(root, files))

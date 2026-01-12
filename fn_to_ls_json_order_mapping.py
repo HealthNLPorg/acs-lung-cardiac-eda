@@ -32,7 +32,7 @@ parser.add_argument(
 def parse_report_id(file_annotation: dict, key: str = "file_upload") -> int:
     file_upload = file_annotation.get(key)
     if file_upload is None:
-        ValueError(f"Cannot find file_upload field in {file_annotation}")
+        raise ValueError(f"Cannot find file_upload field in {file_annotation}")
         return -1
     return int(file_upload.split("."))
 

@@ -42,7 +42,7 @@ def __load_json(line: str) -> note_dict:
     try:
         return cast(note_dict, json.loads(line))
     except Exception:
-        ValueError(f"Can parse the following line as valid JSON:\n{line}")
+        raise ValueError(f"Can parse the following line as valid JSON:\n{line}")
         return {}
 
 
@@ -63,10 +63,10 @@ def __get_provider_dept_name(line: str) -> str | None:
         case 1:
             return matches[0]
         case 0:
-            ValueError(f"No matches found for {target_column_regex} in:\n{line}")
+            raise ValueError(f"No matches found for {target_column_regex} in:\n{line}")
             return None
         case _:
-            ValueError(
+            raise ValueError(
                 f"More than one match {matches} found for {target_column_regex} in:\n{line}"
             )
             return matches[0]
